@@ -7,9 +7,9 @@ import pandas as pd
 from sklearn import clone
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 
-from effective_parameters import get_bootstrap_weights, create_S_from_tree
-from data_utils import marsadd_dgp, marsmult_dgp, generate_mars_data
-from metric_utils import track_metrics_through_single_forest, track_metrics_through_single_gbtreg
+from src.effective_parameters import get_bootstrap_weights, create_S_from_tree
+from src.data_utils import marsadd_dgp, marsmult_dgp, generate_mars_data
+from src.metric_utils import track_metrics_through_single_forest, track_metrics_through_single_gbtreg
 
 def create_file_and_writer(file_name, res_dir, header):
     if not os.path.exists(res_dir):
@@ -30,21 +30,19 @@ def create_file_and_writer(file_name, res_dir, header):
 
 HEADER_BOOSTING =  ['max_leaf_nodes', 'learning_rate', 'seed', 
                              'dataset', 'sigma', 'd',
-          'n_trees_tot', 'n_trees_curr',
+          'n_trees_tot', 'n_estimators',
             'mse_train', 'mse_test',
             'acc_train', 'acc_test',
-            'eff_p_tr',
-           'l2_train_sq', 'l2_test_sq',
+           'ep_train', 'ep_test',
            'mse_train_resamp', 'mse_train_true']
 
 
 HEADER_RF =  ['max_leaf_nodes', 'max_features', 'bootstrap',
                'seed', 'dataset', 'sigma', 'd',
-          'n_trees_tot', 'n_trees_curr',
+          'n_trees_tot', 'n_estimators',
             'mse_train', 'mse_test',
             'acc_train', 'acc_test',
-            'eff_p_tr',
-           'l2_train_sq', 'l2_test_sq',
+           'ep_train', 'ep_test',
            'mse_train_resamp', 'mse_train_true']
 
 

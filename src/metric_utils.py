@@ -7,6 +7,8 @@ from src.effective_parameters import get_bootstrap_weights, create_S_from_tree, 
 
 def compute_metrics_from_S(S_train, S_test, y_train, y_test,
                            y_train_resamp=None, y_train_true=None):
+    n_train = y_train.shape[0]
+    
     # compute predictions
     y_pred_train = np.matmul(S_train, y_train)
     y_pred_test = np.matmul(S_test, y_train)
@@ -32,8 +34,8 @@ def compute_metrics_from_S(S_train, S_test, y_train, y_test,
     eff_p_tr = np.trace(S_train)
 
     # compute l2-norm
-    l2_norm_train_sq = np.mean(np.linalg.norm(S_train, axis=1) ** 2)
-    l2_norm_test_sq = np.mean(np.linalg.norm(S_test, axis=1) ** 2)
+    l2_norm_train_sq = n_train * np.mean(np.linalg.norm(S_train, axis=1) ** 2)
+    l2_norm_test_sq = n_train * np.mean(np.linalg.norm(S_test, axis=1) ** 2)
 
     return mse_train, mse_test, acc_train, acc_test, eff_p_tr, l2_norm_train_sq, l2_norm_test_sq, mse_train_resamp, mse_train_true
 
@@ -45,10 +47,9 @@ def track_metrics_through_single_forest(forest, X_train, X_test,
     # track change in metrics for single forest as we loop through estimators
 
     header = ['n_trees_tot',  'n_estimators',
-                  'train_error_mse', 'test_error_mse',
-                  'train_error_binary', 'test_error_binary',
-              'eff_p_tr',
-              'l2_train_sq', 'l2_test_sq',
+                  'mse_train', 'mse_test',
+                  'acc_train', 'acc_test',
+              'ep_train', 'ep_test',
               'mse_train_resamp', 'mse_train_true']
 
     # create frame to save results in
@@ -89,7 +90,7 @@ def track_metrics_through_single_forest(forest, X_train, X_test,
 
         # append data
         next_row = [n_trees, n + 1, mse_train, mse_test,
-                    acc_train, acc_test, eff_p_tr,
+                    acc_train, acc_test, 
                     l2_norm_train_sq, l2_norm_test_sq,
                     mse_train_resamp, mse_train_true]
 
@@ -117,11 +118,10 @@ def track_metrics_through_single_gbtreg(gbtreg, X_train, X_test, y_train, y_test
     S_test_curr = np.zeros(shape=(n_test, n_train))
 
     # create frame to save
-    header = ['n_boost_tot', 'n_boost',
-              'train_error_mse', 'test_error_mse',
-              'train_error_binary', 'test_error_binary',
-              'eff_p_tr',
-              'l2_train_sq', 'l2_test_sq',
+    header = ['n_boost_tot', 'n_estimators',
+              'mse_train', 'mse_test',
+              'acc_train', 'acc_test',
+              'ep_train', 'ep_test',
                'mse_train_resamp', 'mse_train_true']
 
     out_frame = pd.DataFrame(columns=header)
@@ -147,7 +147,7 @@ def track_metrics_through_single_gbtreg(gbtreg, X_train, X_test, y_train, y_test
 
         # append data
         next_row = [n_trees, n + 1, mse_train, mse_test,
-                    acc_train, acc_test, eff_p_tr,
+                    acc_train, acc_test, 
                     l2_norm_train_sq, l2_norm_test_sq,
                     mse_train_resamp, mse_train_true]
 
