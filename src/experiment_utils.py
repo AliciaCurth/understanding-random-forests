@@ -7,9 +7,11 @@ import pandas as pd
 from sklearn import clone
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 
+from sklearn.metrics import mean_squared_error
+
 from src.effective_parameters import get_bootstrap_weights, create_S_from_tree
-from src.data_utils import marsadd_dgp, marsmult_dgp, generate_mars_data
-from src.metric_utils import track_metrics_through_single_forest, track_metrics_through_single_gbtreg
+from src.data_utils import marsadd_dgp, marsmult_dgp, generate_mars_data, MARS_DGP, generate_test_x_from_train_with_offset
+from src.metric_utils import track_metrics_through_single_forest, track_metrics_through_single_gbtreg, compute_metrics_from_S
 
 def create_file_and_writer(file_name, res_dir, header):
     if not os.path.exists(res_dir):
@@ -29,7 +31,7 @@ def create_file_and_writer(file_name, res_dir, header):
 
 
 HEADER_BOOSTING =  ['max_leaf_nodes', 'learning_rate', 'seed', 
-                             'dataset', 'sigma', 'd',
+                             'dataset', 'sigma', 'd', 'offset',
           'n_trees_tot', 'n_estimators',
             'mse_train', 'mse_test',
             'acc_train', 'acc_test',
@@ -38,12 +40,37 @@ HEADER_BOOSTING =  ['max_leaf_nodes', 'learning_rate', 'seed',
 
 
 HEADER_RF =  ['max_leaf_nodes', 'max_features', 'bootstrap',
-               'seed', 'dataset', 'sigma', 'd',
+               'seed', 'dataset', 'sigma', 'd', 'offset',
           'n_trees_tot', 'n_estimators',
             'mse_train', 'mse_test',
             'acc_train', 'acc_test',
            'ep_train', 'ep_test',
            'mse_train_resamp', 'mse_train_true']
+
+HEADER_DECOMP = ['iteration', 'seed', 'max_leaf_nodes', 
+                  'max_features', 'bootstrap', 'dataset', 'sigma', 
+                  'd', 'offset',
+                  'n_trees_tot', 'n_estimators',
+                  'mse_train', 'mse_test',
+                  'acc_train', 'acc_test',
+                  'ep_train', 'ep_test',
+                  'mse_train_resamp', 'mse_train_true']
+
+HEADER_DECOMP_SUMMARY =['seed', 'n_estimators',
+                         'max_leaf_nodes', 'max_features', 
+                         'bootstrap', 'dataset', 'sigma', 'd', 
+                         'offset', 
+                         'avg_mse', 'repbias', 'modvar', 'avg_excess_mse']
+
+
+HEADER_RESAMP = ['seed', 'n_reps','shuffled_outcomes',
+                 'fixed_forest', 'max_leaf_nodes', 'max_features',
+                  'bootstrap', 'dataset', 'sigma', 'd',
+                  'n_estimators',
+                    'mse_train', 'mse_test', 'mse_train_resamp',
+                    'ep_train', 'ep_test',
+                    'dof', 'var_train_pred', 'var_test_pred'
+                  ]
 
 
 GB_PARAMS = {'max_features': None,
@@ -60,84 +87,94 @@ RF_PARAMS = {
 
 
 def run_simulated_experiments(file_name, configs, n_reps=10, boosting=False, d=5, n_train=500, n_test=500, marsadd=True, sigma=1,
-                                 save_file=True, res_dir='results/', verbose=True):
-   random_states = np.arange(1, n_reps+1)
+                                 save_file=True, res_dir='results/', verbose=True, offsets=None):
+  if offsets is None:
+    offsets = [None]
+  
+  random_states = np.arange(1, n_reps+1)
 
-   if save_file:
-      out_file, writer = create_file_and_writer(file_name + "_boost" if boosting else file_name, res_dir, HEADER_BOOSTING if boosting else HEADER_RF)
+  if save_file:
+    out_file, writer = create_file_and_writer(file_name + "_boost" if boosting else file_name, res_dir, HEADER_BOOSTING if boosting else HEADER_RF)
    
-   out_frame = pd.DataFrame(columns=HEADER_BOOSTING if boosting else HEADER_RF)
+  out_frame = pd.DataFrame(columns=HEADER_BOOSTING if boosting else HEADER_RF)
    
-   for base_seed in random_states:
-       # generate data
-       X_train, y_train, X_test, y_test = generate_mars_data(n_train=n_train, n_test=n_test, d=d, sigma=sigma, seed=base_seed, marsadd=marsadd)
-       y_train_resamp = marsadd_dgp(X_train, sigma=sigma) if marsadd else marsmult_dgp(X_train, sigma=sigma)
-       y_train_true = marsadd_dgp(X_train, sigma=0) if marsadd else marsmult_dgp(X_train, sigma=0)
+  for base_seed in random_states:
+      for offset in offsets:
+        # generate data
+        X_train, y_train, X_test, y_test = generate_mars_data(n_train=n_train, n_test=n_test, d=d, sigma=sigma, seed=base_seed, marsadd=marsadd)
+        y_train_resamp = marsadd_dgp(X_train, sigma=sigma) if marsadd else marsmult_dgp(X_train, sigma=sigma)
+        y_train_true = marsadd_dgp(X_train, sigma=0) if marsadd else marsmult_dgp(X_train, sigma=0)
 
-       for idx, config in enumerate(configs):
-        if verbose:
-             if boosting:
-                print("Running boosting experiment with seed {}, n_estimators {}, learning rate {} and max_leaf_nodes {}.".format(base_seed,
-                                                                                             config['n_estimators'],
-                                                                                              config['learning_rate'],
-                                                                                             config['max_leaf_nodes'] 
-                                                                                            ))
-             else:
-                print("Running forest experiment with seed {}, n_estimators {}, max features {}, bootstrap {} and max_leaf_nodes {}.".format(base_seed,
-                                                                                             config['n_estimators'],
-                                                                                             config['max_features'],
-                                                                                             config['bootstrap'],
-                                                                                             config['max_leaf_nodes'], 
-                                                                                             ))
-        if boosting: 
-            clf = GradientBoostingRegressor(n_estimators=config['n_estimators'],
-                                        max_leaf_nodes=config['max_leaf_nodes'],
-                                        learning_rate=config['learning_rate'],
-                                    random_state = base_seed, **GB_PARAMS)
-        else:
-            clf = RandomForestRegressor(n_estimators=config['n_estimators'],
-                                    max_leaf_nodes=config['max_leaf_nodes'],
-                                    bootstrap=config['bootstrap'],
-                                    max_features=config['max_features'],
-                                    random_state = base_seed, **RF_PARAMS)
+        if offset is not None:
+          # regenerate data with applicable offset
+          X_test = generate_test_x_from_train_with_offset(X_train, offset)
+          y_test = marsadd_dgp(X_test, sigma=sigma) if marsadd else marsmult_dgp(X_test, sigma=sigma)
 
-        clf.fit(X_train, y_train)
-        if boosting:
-            out_iter = track_metrics_through_single_gbtreg(clf, X_train, X_test,
-                                                       y_train,
-                                                       y_test,
-                                                       verbose>1, y_train_resamp, y_train_true)
-            next_frame = pd.concat([pd.DataFrame(columns=['max_leaf_nodes', 'learning_rate', 'seed', 'dataset', 'sigma', 'd'], 
-                                                 data=[[config['max_leaf_nodes'], config['learning_rate'], base_seed, marsadd, sigma, d]]
-                                             ), out_iter], axis=1)
-        else:
-            out_iter = track_metrics_through_single_forest(clf, X_train, X_test, y_train, y_test,
+        for idx, config in enumerate(configs):
+          if verbose:
+                if boosting:
+                  print("Running boosting experiment with seed {}, n_estimators {}, learning rate {} and max_leaf_nodes {}.".format(base_seed,
+                                                                                                config['n_estimators'],
+                                                                                                config['learning_rate'],
+                                                                                                config['max_leaf_nodes'] 
+                                                                                              ))
+                else:
+                  print("Running forest experiment with seed {}, n_estimators {}, max features {}, bootstrap {} and max_leaf_nodes {}.".format(base_seed,
+                                                                                                config['n_estimators'],
+                                                                                                config['max_features'],
+                                                                                                config['bootstrap'],
+                                                                                                config['max_leaf_nodes'], 
+                                                                                                ))
+          if boosting: 
+              clf = GradientBoostingRegressor(n_estimators=config['n_estimators'],
+                                          max_leaf_nodes=config['max_leaf_nodes'],
+                                          learning_rate=config['learning_rate'],
+                                      random_state = base_seed, **GB_PARAMS)
+          else:
+              clf = RandomForestRegressor(n_estimators=config['n_estimators'],
+                                      max_leaf_nodes=config['max_leaf_nodes'],
+                                      bootstrap=config['bootstrap'],
+                                      max_features=config['max_features'],
+                                      random_state = base_seed, **RF_PARAMS)
+
+          clf.fit(X_train, y_train)
+          if boosting:
+              out_iter = track_metrics_through_single_gbtreg(clf, X_train, X_test,
+                                                          y_train,
+                                                          y_test,
                                                           verbose>1, y_train_resamp, y_train_true)
-            next_frame = pd.concat([pd.DataFrame(columns=['max_leaf_nodes', 'max_features', 'bootstrap', 'seed', 'dataset', 'sigma', 'd'], 
-                                               data=[[config['max_leaf_nodes'], config['max_features'], config['bootstrap'], base_seed,  marsadd, sigma, d]]
-                                             ), out_iter], axis=1)
+              next_frame = pd.concat([pd.DataFrame(columns=['max_leaf_nodes', 'learning_rate', 'seed', 'dataset', 'sigma', 'd', 'offset'], 
+                                                    data=[[config['max_leaf_nodes'], config['learning_rate'], base_seed, marsadd, sigma, d, offset]]
+                                                ), out_iter], axis=1)
+          else:
+              out_iter = track_metrics_through_single_forest(clf, X_train, X_test, y_train, y_test,
+                                                            verbose>1, y_train_resamp, y_train_true)
+              next_frame = pd.concat([pd.DataFrame(columns=['max_leaf_nodes', 'max_features', 'bootstrap', 'seed', 'dataset', 'sigma', 'd', 'offset'], 
+                                                  data=[[config['max_leaf_nodes'], config['max_features'], config['bootstrap'], base_seed,  marsadd, sigma, d, offset]]
+                                                ), out_iter], axis=1)
         
           
 
-        # write to file
-        if save_file:
-            for i in range(next_frame.shape[0]):
-                next_row = next_frame.iloc[i, :].values
-                writer.writerow(next_row)
+          # write to file
+          if save_file:
+              for i in range(next_frame.shape[0]):
+                  next_row = next_frame.iloc[i, :].values
+                  writer.writerow(next_row)
 
-        # update dataframe
-        out_frame = pd.concat([out_frame, next_frame])
-        
-   if save_file:
-        out_file.close()
-   return out_frame
+          # update dataframe
+          out_frame = pd.concat([out_frame, next_frame])
+      
+  if save_file:
+      out_file.close()
+  return out_frame
           
                         
 
-def run_resampling_experiment(forest, dgp, X_train, X_test, n_reps,
-                              shuffle_y: bool = False, fix_forest: bool = False,
+def run_one_resampling_experiment(forest, dgp, X_train, X_test, n_reps,
+                              shuffle_y: bool = False, 
+                              fix_forest: bool = False,
                               seed=42):
-  np.random.seed(42)
+  np.random.seed(seed)
 
   n_train = X_train.shape[0]
   n_test = X_test.shape[0]
@@ -232,7 +269,161 @@ def run_resampling_experiment(forest, dgp, X_train, X_test, n_reps,
   return mse_train, mse_test, mse_train_resamp, ep_train, ep_test, var_train_pred, var_test_pred, train_pred_cov
 
 
-          
+# Can be used to replicate the analysis in section 3.2 and appendix A
+def run_resampling_experiments(file_name, configs, n_reps=50, n_seeds=10, boosting=False, d=5, n_train=500, n_test=500, marsadd=True, sigma=1,
+                                 save_file=True, res_dir='results/', verbose=True, shuffle_y=False, fix_forest=False):
+  # create file 
+  if save_file:
+    out_file, writer = create_file_and_writer(file_name, res_dir, HEADER_RESAMP)
+   
+  out_frame = pd.DataFrame(columns=HEADER_RESAMP)
+
+  random_states = np.arange(1, n_seeds+1)
+
+  for base_seed in random_states:
+    # generate data
+    X_train, y_train, X_test, y_test = generate_mars_data(n_train=n_train, n_test=n_test, d=d, sigma=sigma, seed=base_seed, marsadd=marsadd)
+    dgp = MARS_DGP(marsadd=marsadd, sigma=sigma)
+
+    for idx, config in enumerate(configs):
+      # run for different configs
+      if verbose:
+        print("Running {} experiment with seed {}, bootstrap {}, n_estimators {}, max_features {} and max_leaf_nodes {}.".format(n_reps, base_seed,
+                                                                                                             config['bootstrap'],
+                                                                                             config['n_estimators'], config['max_features'],
+                                                                                             config['max_leaf_nodes']))
+      clf = RandomForestRegressor(n_estimators=config['n_estimators'], max_leaf_nodes=config['max_leaf_nodes'],
+                                    bootstrap=config['bootstrap'], max_features=config['max_features'],
+                                    random_state = base_seed, **RF_PARAMS)
+
+      mse_train, mse_test, mse_train_resamp,ep_train, ep_test, var_train_pred, var_test_pred, train_pred_cov = run_one_resampling_experiment(clf, dgp, X_train, X_test, n_reps, 
+                                                                                                                                            shuffle_y=shuffle_y, fix_forest=fix_forest, 
+                                                                                                                                            seed=(base_seed+2)*5432)
+            
+
+      # create dataframe of results
+      res_i = pd.DataFrame(columns=['n_estimators',
+                    'mse_train', 'mse_test', 'mse_train_resamp',
+                    'ep_train', 'ep_test',
+                    'dof', 'var_train_pred', 'var_test_pred'],
+                      data=np.transpose(np.array([np.arange(1, config['n_estimators']+1),
+                                    mse_train, mse_test, mse_train_resamp,
+                                    ep_train, ep_test, train_pred_cov,
+                                    var_train_pred, var_test_pred])))
+
+      # append to existing results
+      next_frame = pd.concat([pd.concat([pd.DataFrame(columns=['seed', 'n_reps','shuffled_outcomes','fixed_forest', 'max_leaf_nodes', 'max_features', 'bootstrap', 'dataset', 'sigma', 'd'],
+                                          data=[[base_seed, n_reps, shuffle_y, fix_forest, config['max_leaf_nodes'], config['max_features'], config['bootstrap'], marsadd, sigma, d]])] * config['n_estimators'], axis=0).reset_index(drop=True),
+                                  res_i], axis=1)
+
+      # write to file
+      if save_file:
+        for i in range(next_frame.shape[0]):
+          next_row = next_frame.iloc[i, :].values
+          writer.writerow(next_row)
+
+      # update dataframe
+      out_frame = pd.concat([out_frame, next_frame])
+
+  if save_file:
+    out_file.close()
+
+  return out_frame
+
+
+# can be used to replicate the analysis in Figure 13
+def run_error_decomp_experiments(file_name, configs, offsets, n_reps=50, n_seeds=10, save_file=True, res_dir='results/', verbose=True,
+                                d=5, n_train=500, n_test=500, marsadd=True, sigma=0):
+  out_file, writer = create_file_and_writer(file_name, res_dir, HEADER_DECOMP)
+
+  out_frame = pd.DataFrame(columns=HEADER_DECOMP)
+  summary_frame = pd.DataFrame(columns=HEADER_DECOMP_SUMMARY)
+
+  random_states = np.arange(1, n_seeds+1)
+
+  for base_seed in random_states:
+    for offset in offsets:
+      X_train, y_train, _, _ = generate_mars_data(n_train=n_train, n_test=n_test, d=d, sigma=sigma, seed=base_seed, marsadd=marsadd)
+      X_test = generate_test_x_from_train_with_offset(X_train, offset)
+      y_test = marsadd_dgp(X_test, sigma=sigma) if marsadd else marsmult_dgp(X_test, sigma=sigma)
+      y_train_resamp = marsadd_dgp(X_train, sigma=sigma) if marsadd else marsmult_dgp(X_train, sigma=sigma)
+      y_train_true = marsadd_dgp(X_train, sigma=0) if marsadd else marsmult_dgp(X_train, sigma=0)
+
+      for idx, config in enumerate(configs):
+        predictions = np.zeros(shape=(n_test, config['n_estimators'], n_reps))
+        for rep in range(n_reps):
+            print("Running experiment with seed {} version {}, bootstrap {}, n_estimators {}, max_features {} and max_leaf_nodes {}.".format(base_seed, rep,
+                                                                                                              config['bootstrap'],
+                                                                                              config['n_estimators'],
+                                                                                                config['max_features'],
+                                                                                              config['max_leaf_nodes']))
+            clf = RandomForestRegressor(n_estimators=config['n_estimators'],
+                                      max_leaf_nodes=config['max_leaf_nodes'],
+                                      bootstrap=config['bootstrap'],
+                                      max_features=config['max_features'],
+                                      random_state = base_seed*rep, **RF_PARAMS)
+
+            clf.fit(X_train, y_train)
+
+            for n_trees in range(config['n_estimators']):
+              # save current predictions
+              predictions[:, n_trees, rep] = clf.estimators_[n_trees].predict(X_test)
+
+            # get effective parameters
+            out_iter = track_metrics_through_single_forest(clf, X_train, X_test, y_train, y_test, 0, y_train_resamp, y_train_true)
+
+            next_frame = pd.concat([pd.DataFrame(columns=['iteration', 'seed', 'max_leaf_nodes', 'max_features', 'bootstrap', 'dataset', 'sigma', 'd', 'offset'],
+                                                data=[[rep, base_seed, config['max_leaf_nodes'], config['max_features'], config['bootstrap'], marsadd, sigma, d, offset]]),
+                                  out_iter], axis=1)
+
+            # write to file
+            if save_file:
+              for i in range(next_frame.shape[0]):
+                next_row = next_frame.iloc[i, :].values
+                writer.writerow(next_row)
+
+            # update dataframe
+            out_frame = pd.concat([out_frame, next_frame])
+
+        # analyse relative performance of model from each iteration
+        for n_trees in range(config['n_estimators']):
+          # get predictions of current ensemble size
+          preds_n_trees = predictions[:, :(n_trees+1), :].mean(axis=1)
+
+          # get mse for each repetition
+          mses = np.mean((preds_n_trees - y_test.reshape(-1, 1))**2, axis=0)
+
+          # avg mse
+          avg_mse = np.mean(mses)
+
+          # find best prediction function among n_reps
+          mu_star = np.argmin(mses)
+          rep_bias = mean_squared_error(preds_n_trees[:, mu_star], y_test)
+
+          mean_excess = np.mean(mses - rep_bias)
+
+          # aggregate to mod_var
+          mod_var = np.mean((preds_n_trees - preds_n_trees[:, mu_star].reshape(-1, 1))**2)
+
+          next_summary = pd.DataFrame(columns = HEADER_DECOMP_SUMMARY,
+                                      data = [[base_seed, n_trees, config['max_leaf_nodes'], config['max_features'], config['bootstrap'],
+                                              marsadd, sigma, d,  offset, avg_mse, rep_bias, mod_var, mean_excess]])
+          summary_frame = pd.concat([summary_frame, next_summary])
+
+  if save_file:
+    out_file.close()
+
+    # also save summary
+    summary_file, writer_summary = create_file_and_writer(file_name, res_dir, HEADER_DECOMP_SUMMARY)
+
+    for i in range(summary_frame.shape[0]):
+      next_row = summary_frame.iloc[i, :].values
+      writer_summary.writerow(next_row)
+
+    summary_file.close()
+  
+  return summary_frame
+
 
 
 

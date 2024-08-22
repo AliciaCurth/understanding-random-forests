@@ -23,7 +23,6 @@ def generate_mars_data(n_train, n_test, d, sigma=1, marsadd=True, seed=42):
 def generate_test_x_from_train_with_offset(X, offset):
   n, d = X.shape
   X_offset = np.random.uniform(low=-offset, high=offset, size=(n, d))
-
   return X + X_offset
 
 
