@@ -6,7 +6,8 @@ from sklearn.metrics import mean_squared_error
 from src.effective_parameters import get_bootstrap_weights, create_S_from_tree, create_S_from_single_boosted_tree
 
 def compute_metrics_from_S(S_train, S_test, y_train, y_test,
-                           y_train_resamp=None, y_train_true=None):
+                           y_train_resamp=None, y_train_true=None,
+                           classification_threshold=0):
     n_train = y_train.shape[0]
     
     # compute predictions
@@ -27,8 +28,8 @@ def compute_metrics_from_S(S_train, S_test, y_train, y_test,
     else:
       mse_train_true = None
 
-    acc_train = 1 - np.mean((y_pred_train > 0) == (y_train > 0))
-    acc_test = 1 - np.mean((y_pred_test > 0) == (y_test > 0))
+    acc_train = 1 - np.mean((y_pred_train > classification_threshold) == (y_train > classification_threshold))
+    acc_test = 1 - np.mean((y_pred_test > classification_threshold) == (y_test > classification_threshold))
 
     # compute trace metric
     eff_p_tr = np.trace(S_train)
